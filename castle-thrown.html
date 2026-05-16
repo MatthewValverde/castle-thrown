@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Castle Thrown</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=MedievalSharp&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 100vh;
+  padding: 16px;
+  background: radial-gradient(ellipse at center, #011001 0%, #000 70%);
+  font-family: 'Courier Prime', monospace;
+  color: #00ff41;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#hud {
+  width: 1200px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 7px 18px;
+  background: #000;
+  border: 1px solid #00cc33;
+  border-bottom: none;
+  gap: 10px;
+}
+
+.hud-castle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.hud-castle.right { justify-content: flex-end; }
+
+.hud-label {
+  font-family: 'MedievalSharp', serif;
+  font-size: 12px;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  text-shadow: 0 0 8px #00ff41;
+}
+.hud-label.cpu-label { color: #ff5555; text-shadow: 0 0 8px #ff4444; }
+
+.hud-bar {
+  width: 190px;
+  height: 10px;
+  border: 1px solid #006618;
+  background: #001100;
+  position: relative;
+  flex-shrink: 0;
+}
+.hud-fill {
+  position: absolute;
+  top: 0; left: 0;
+  height: 100%;
+  background: #00ff41;
+  box-shadow: 0 0 7px #00ff41;
+  transition: width 0.35s ease;
+}
+.hud-fill.cpu-fill {
+  background: #ff4444;
+  box-shadow: 0 0 7px #ff4444;
+  right: 0; left: auto;
+}
+
+.hud-pct {
+  font-size: 12px;
+  font-family: 'Courier Prime', monospace;
+  min-width: 36px;
+  text-align: center;
+}
+.hud-pct.cpu-pct { color: #ff6666; }
+
+#hud-center { text-align: center; padding: 0 16px; }
+
+#game-title {
+  font-family: 'MedievalSharp', serif;
+  font-size: 19px;
+  letter-spacing: 5px;
+  color: #00ff41;
+  text-shadow: 0 0 12px #00ff41, 0 0 24px #00aa22;
+  white-space: nowrap;
+}
+#round-display { font-size: 10px; letter-spacing: 2px; color: #00aa2a; margin-top: 2px; }
+#status-line   { font-size: 10px; color: #66ff88; margin-top: 2px; letter-spacing: 1px; min-height: 14px; }
+
+#canvas-wrap { position: relative; line-height: 0; }
+
+canvas {
+  display: block;
+  cursor: crosshair;
+  border: 1px solid #00cc33;
+  box-shadow: 0 0 25px rgba(0,255,65,0.12), 0 0 60px rgba(0,255,65,0.05);
+}
+
+#canvas-wrap::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: repeating-linear-gradient(
+    0deg, rgba(0,0,0,0.05) 0px, rgba(0,0,0,0.05) 1px,
+    transparent 1px, transparent 3px
+  );
+  pointer-events: none;
+  z-index: 5;
+}
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="hud-castle">
+    <span class="hud-label">[ PLAYER ]</span>
+    <div class="hud-bar"><div class="hud-fill" id="p-fill" style="width:100%"></div></div>
+    <span class="hud-pct" id="p-pct">100%</span>
+  </div>
+
+  <div id="hud-center">
+    <div id="game-title">⚔ CASTLE THROWN ⚔</div>
+    <div id="round-display">ROUND 1 / 20</div>
+    <div id="status-line">▶ CLICK TO BEGIN YOUR SIEGE</div>
+  </div>
+
+  <div class="hud-castle right">
+    <span class="hud-pct cpu-pct" id="c-pct">100%</span>
+    <div class="hud-bar">
+      <div class="hud-fill cpu-fill" id="c-fill" style="width:100%"></div>
+    </div>
+    <span class="hud-label cpu-label">[ CPU ]</span>
+  </div>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="game" width="1200" height="640"></canvas>
+</div>
+
+<script>
+// ╔══════════════════════════════════════════════════════════════════╗
+// ║   CASTLE THROWN  ·  ASCII Medieval Siege  ·  Terminal Green     ║
+// ╚══════════════════════════════════════════════════════════════════╝
+
+const canvas = document.getElementById('game');
+const ctx    = canvas.getContext('2d');
+
+// ── DIMENSIONS ─────────────────────────────────────────────────────
+const W = 1200, H = 640;
+const CW = 9, CH = 16;            // char cell size (px)
+const BW = 46, BH = 44;           // block pixel size
+const COLS = 5, ROWS = 5;         // castle grid
+const CAS_W = COLS * BW;          // 230
+const CAS_H = ROWS * BH;          // 220
+const GROUND = 600;
+const TOWER_H = 54;
+const TOWER_W = BW - 10;
+
+// Castle top-left pixel positions
+const PC = { x: 68,              y: GROUND - CAS_H - 16 };   // Player
+const CC = { x: W - 68 - CAS_W, y: GROUND - CAS_H - 16 };   // CPU
+
+// Cannon launch points (right edge of PC, left edge of CC)
+const PL = { x: PC.x + CAS_W + 2, y: PC.y + BH * 2 + 8 };
+const CL = { x: CC.x - 2,         y: CC.y + BH * 2 + 8 };
+
+// ── PHYSICS ─────────────────────────────────────────────────────────
+const G_GRAV   = 0.27;
+const MAX_SPD  = 18;
+const MAX_DRAG = 155;
+const MAX_HP   = 1;
+const MAX_TURN = 20;
+
+// ── PALETTE ─────────────────────────────────────────────────────────
+const GN1='#00ff41', GN2='#00cc33', GN3='#007a1e', GN4='#003d0f', GN5='#001506';
+const RD1='#ff5555', RD2='#cc2222', RD3='#882211', RD4='#3d0808', RD5='#160303';
+
+// ── GAME STATE ───────────────────────────────────────────────────────
+const S = { TITLE:'T', AIM:'A', FIRE:'F', CPU:'C', CFIR:'CF', OVER:'O' };
+let state = S.TITLE;
+let turn  = 1;
+let pb, cb;           // player/cpu block arrays [row][col]=hp
+let proj  = null;     // { x,y,vx,vy,player }
+let trail = [];
+let fx    = [];       // explosion particles
+let drag  = null;     // { ox,oy,cx,cy }
+let flash = null;     // { cas:'p'|'c', r,c, t }
+let tAnim = 0;        // title/gameover animation frame
+
+// ── INIT ─────────────────────────────────────────────────────────────
+function mkBlocks() {
+  const b = [];
+  for (let r=0;r<ROWS;r++){b[r]=[];for(let c=0;c<COLS;c++)b[r][c]=MAX_HP;}
+  return b;
+}
+
+function startGame() {
+  pb=mkBlocks(); cb=mkBlocks();
+  turn=1; proj=null; trail=[]; fx=[]; drag=null; flash=null;
+  state=S.AIM;
+  setRound(1);
+  setStatus('▶ YOUR TURN — Drag right to aim, release to fire');
+  updateHUD();
+}
+
+// ── HUD ──────────────────────────────────────────────────────────────
+function hpFrac(b) {
+  let s=0;
+  for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++)s+=b[r][c];
+  return s/(ROWS*COLS*MAX_HP);
+}
+function updateHUD() {
+  const ph=Math.round(hpFrac(pb)*100), ch=Math.round(hpFrac(cb)*100);
+  document.getElementById('p-pct').textContent=ph+'%';
+  document.getElementById('c-pct').textContent=ch+'%';
+  document.getElementById('p-fill').style.width=ph+'%';
+  document.getElementById('c-fill').style.width=ch+'%';
+}
+function setStatus(m){ document.getElementById('status-line').textContent=m; }
+function setRound(n) { document.getElementById('round-display').textContent=`ROUND ${n} / ${MAX_TURN}`; }
+
+// ── GEOMETRY ─────────────────────────────────────────────────────────
+// row 0 = castle bottom, row ROWS-1 = top
+function bRect(castle, r, c) {
+  return { x: castle.x+c*BW, y: castle.y+CAS_H-(r+1)*BH, w:BW, h:BH };
+}
+
+// ── DRAWING UTILS ────────────────────────────────────────────────────
+function gl(col,blur=8){ctx.shadowColor=col;ctx.shadowBlur=blur;}
+function ng(){ctx.shadowBlur=0;}
+function txt(s,x,y,col=GN1,sz=12,blur=3,align='left'){
+  ctx.font=`${sz}px 'Courier Prime',monospace`;
+  ctx.fillStyle=col; ctx.textAlign=align;
+  gl(col,blur); ctx.fillText(s,x,y); ng(); ctx.textAlign='left';
+}
+
+// ── SCENE ────────────────────────────────────────────────────────────
+function drawBG() {
+  ctx.fillStyle='#020c02'; ctx.fillRect(0,0,W,H);
+
+  // Vertical matrix-rain guides
+  ctx.fillStyle='#011801';
+  for(let x=0;x<W;x+=CW*10) ctx.fillRect(x,0,1,GROUND-10);
+
+  // Starfield (deterministic)
+  const sc=['·','·','+','·','·','*','·','·'];
+  ctx.fillStyle='#003810'; ctx.font="10px 'Courier Prime',monospace";
+  for(let i=0;i<55;i++){
+    const sx=(i*241+89)%W, sy=(i*131+61)%(GROUND-90)+20;
+    ctx.fillText(sc[i%sc.length],sx,sy);
+  }
+
+  // Ground fill
+  gl(GN3,5);
+  ctx.fillStyle='#001f00'; ctx.fillRect(0,GROUND,W,H-GROUND); ng();
+
+  // Ground ASCII crenellation
+  ctx.fillStyle=GN4; ctx.font="12px 'Courier Prime',monospace";
+  for(let x=0;x<W;x+=CW){
+    ctx.fillText(((x/CW)%5===0)?'▲':'─',x,GROUND+14);
+  }
+}
+
+function drawBlock(x,y,w,h,hp,isP,isFlash) {
+  const c1=isP?GN1:RD1, c2=isP?GN2:RD2, c3=isP?GN3:RD3,
+        c4=isP?GN4:RD4, c5=isP?GN5:RD5;
+
+  if(hp<=0){
+    // Rubble
+    ctx.fillStyle=c5; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle=c4; ctx.textAlign='center';
+    ctx.font="11px 'Courier Prime',monospace";
+    ctx.fillText('·.·',x+w/2,y+h*0.42);
+    ctx.fillText(' · ',x+w/2,y+h*0.72);
+    ctx.textAlign='left'; return;
+  }
+  if(isFlash){
+    ctx.fillStyle=isP?'#aaffbb':'#ffaa88'; ctx.fillRect(x,y,w,h); return;
+  }
+
+  // Block background
+  ctx.fillStyle=c5; ctx.fillRect(x,y,w,h);
+
+  // Border
+  const bCol=hp===MAX_HP?c1:(hp===2?c2:c3);
+  ctx.strokeStyle=bCol; ctx.lineWidth=1;
+  gl(bCol,hp===MAX_HP?5:2);
+  ctx.strokeRect(x+.5,y+.5,w-1,h-1); ng();
+
+  // ASCII fill chars (two rows)
+  const cx=x+w/2, cy=y+h/2;
+  let chars,fc;
+  if(hp===3){chars='▓▓▓';fc=c1;}
+  else if(hp===2){chars='▒▓░';fc=c2;}
+  else{chars='░··';fc=c3;}
+  ctx.fillStyle=fc; ctx.textAlign='center';
+  ctx.font="13px 'Courier Prime',monospace";
+  gl(fc,3); ctx.fillText(chars,cx,cy-2); ctx.fillText(chars,cx,cy+13);
+  ng(); ctx.textAlign='left';
+}
+
+function drawTower(x,y,w,h,isP,alive) {
+  if(!alive) return;
+  const col=isP?GN1:RD1, bg=isP?GN5:RD5;
+  const tw=Math.floor(w/4), th=9;
+
+  ctx.fillStyle=bg; ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle=col; ctx.lineWidth=1; gl(col,5);
+  ctx.strokeRect(x+.5,y+.5,w-1,h-1);
+
+  // Battlements
+  for(let i=0;i<3;i++){
+    const bx=x+tw*.4+i*tw*1.05;
+    ctx.fillStyle=bg; ctx.fillRect(bx,y-th,tw,th);
+    ctx.strokeRect(bx+.5,y-th+.5,tw-1,th-1);
+  }
+
+  // Pointed spire
+  ctx.beginPath();
+  ctx.moveTo(x+w/2,y-th-22); ctx.lineTo(x+2,y-th+2); ctx.lineTo(x+w-2,y-th+2);
+  ctx.closePath(); ctx.stroke(); ng();
+}
+
+function drawCastle(cas, blocks, isP) {
+  const col=isP?GN1:RD1, col2=isP?GN2:RD2, col4=isP?GN4:RD4;
+
+  // Blocks
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
+    const rect=bRect(cas,r,c);
+    const isF=flash&&flash.cas===(isP?'p':'c')&&flash.r===r&&flash.c===c&&flash.t>0;
+    drawBlock(rect.x,rect.y,rect.w,rect.h,blocks[r][c],isP,isF);
+  }
+
+  // Outer frame
+  ctx.strokeStyle=col; ctx.lineWidth=2;
+  gl(col,12); ctx.strokeRect(cas.x-1,cas.y-1,CAS_W+2,CAS_H+2); ng();
+
+  // Towers at columns 0, 2, 4
+  for(const tc of [0,2,4]){
+    const alive=blocks[ROWS-1][tc]>0;
+    drawTower(cas.x+tc*BW+4,cas.y-TOWER_H,TOWER_W,TOWER_H,isP,alive);
+  }
+
+  // Base platform
+  const py=cas.y+CAS_H;
+  ctx.fillStyle=col4; gl(col2,4);
+  ctx.strokeStyle=col2; ctx.lineWidth=1;
+  ctx.fillRect(cas.x-6,py,CAS_W+12,17);
+  ctx.strokeRect(cas.x-6+.5,py+.5,CAS_W+11,16); ng();
+
+  // Walker legs
+  ctx.strokeStyle=col2; ctx.lineWidth=2; gl(col2,3);
+  const by=py+17;
+  for(const lf of [.16,.50,.84]){
+    const lx=cas.x+CAS_W*lf;
+    ctx.beginPath(); ctx.moveTo(lx,by); ctx.lineTo(lx-9,by+15); ctx.lineTo(lx-13,GROUND); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(lx,by); ctx.lineTo(lx+9,by+15); ctx.lineTo(lx+13,GROUND); ctx.stroke();
+  }
+  ng();
+
+  // Cannon icon
+  const lp=isP?PL:CL;
+  gl(col,8);
+  ctx.fillStyle=col; ctx.textAlign='center';
+  ctx.font="14px 'Courier Prime',monospace";
+  ctx.fillText(isP?'(=>':'<=)',lp.x,lp.y+5);
+  ctx.textAlign='left'; ng();
+}
+
+function drawProj() {
+  if(!proj) return;
+  const col=proj.player?'#aaff66':'#ff8844';
+
+  // Trail
+  ctx.textAlign='center'; ctx.font="10px 'Courier Prime',monospace";
+  for(let i=0;i<trail.length;i++){
+    ctx.globalAlpha=(i/trail.length)*0.45;
+    ctx.fillStyle=col; gl(col,3);
+    ctx.fillText('·',trail[i].x,trail[i].y+4);
+  }
+  ctx.globalAlpha=1; ng();
+
+  // Projectile
+  gl(col,18); ctx.fillStyle=col;
+  ctx.font="22px 'Courier Prime',monospace";
+  ctx.fillText('*',proj.x,proj.y+7);
+  ctx.textAlign='left'; ng();
+}
+
+function drawAim() {
+  if(!drag||state!==S.AIM) return;
+  const dx=drag.cx-drag.ox, dy=drag.cy-drag.oy;
+  const dist=Math.hypot(dx,dy);
+  if(dist<8) return;
+
+  const spd=Math.min(dist,MAX_DRAG)/MAX_DRAG*MAX_SPD;
+  const ang=Math.atan2(dy,dx);
+  let px=PL.x,py=PL.y,pvx=Math.cos(ang)*spd,pvy=Math.sin(ang)*spd;
+
+  ctx.textAlign='center'; ctx.font="12px 'Courier Prime',monospace";
+  gl('#55ff77',4);
+  for(let i=0;i<32;i++){
+    px+=pvx; py+=pvy; pvy+=G_GRAV;
+    if(i%2===0){
+      ctx.globalAlpha=1-(i/32)*0.85;
+      ctx.fillStyle='#66ff88'; ctx.fillText('·',px,py);
+    }
+    if(py>GROUND||px>W+50||px<-50) break;
+  }
+  ctx.globalAlpha=1; ng(); ctx.textAlign='left';
+
+  // Power bar
+  const pct=Math.min(dist,MAX_DRAG)/MAX_DRAG;
+  const bars=Math.round(pct*12);
+  const pBar='PWR ['+'█'.repeat(bars)+'·'.repeat(12-bars)+']';
+  txt(pBar, PC.x, PC.y-18, pct>.7?GN1:GN2, 11, 4);
+}
+
+function drawFX() {
+  ctx.textAlign='center'; ctx.font="14px 'Courier Prime',monospace";
+  for(const e of fx){
+    ctx.globalAlpha=e.life/e.maxLife;
+    ctx.fillStyle=e.col; gl(e.col,10);
+    ctx.fillText(e.ch,e.x,e.y);
+  }
+  ctx.globalAlpha=1; ng(); ctx.textAlign='left';
+}
+
+// ── TITLE SCREEN ─────────────────────────────────────────────────────
+function drawTitle() {
+  drawBG();
+  tAnim++;
+  ctx.textAlign='center';
+
+  // Big title
+  ctx.font="54px 'MedievalSharp',serif";
+  ctx.fillStyle=GN1; gl(GN1,22);
+  ctx.fillText('CASTLE  THROWN',W/2,195); ng();
+
+  // Sub-line
+  ctx.font="13px 'Courier Prime',monospace";
+  ctx.fillStyle=GN3; gl(GN3,4);
+  ctx.fillText('[ A S C I I   M E D I E V A L   S I E G E ]',W/2,230); ng();
+
+  // ASCII castle art
+  const art=[
+    '   /\\    /\\    /\\          /\\    /\\    /\\   ',
+    '  /  \\  /  \\  /  \\        /  \\  /  \\  /  \\  ',
+    ' |    ||    ||    |      |    ||    ||    | ',
+    ' | ▓▓ || ▓▓ || ▓▓ |      | ▓▓ || ▓▓ || ▓▓ | ',
+    ' | ▓▓ || ▓▓ || ▓▓ |      | ▓▓ || ▓▓ || ▓▓ | ',
+    ' |    ||    ||    |      |    ||    ||    | ',
+    ' |════||════||════|      |════||════||════| ',
+  ];
+  ctx.font="13px 'Courier Prime',monospace"; ctx.fillStyle=GN4; gl(GN4,2);
+  art.forEach((l,i)=>ctx.fillText(l,W/2,290+i*17)); ng();
+
+  // Instructions
+  ctx.font="11px 'Courier Prime',monospace"; ctx.fillStyle=GN3;
+  const ins=[
+    '  Drag → to set direction & power  ·  Release to fire',
+    '  Hit enemy blocks to lower their castle HP',
+    '  Destroy their keep or deal the most damage in 20 rounds',
+  ];
+  ins.forEach((l,i)=>ctx.fillText(l,W/2,440+i*17));
+
+  // Blink prompt
+  if(Math.floor(tAnim/36)%2){
+    ctx.font="18px 'MedievalSharp',serif"; ctx.fillStyle=GN1;
+    gl(GN1,12); ctx.fillText('[ CLICK TO BEGIN YOUR SIEGE ]',W/2,502); ng();
+  }
+  ctx.textAlign='left';
+}
+
+// ── GAME OVER ────────────────────────────────────────────────────────
+function drawGameOver() {
+  ctx.fillStyle='rgba(0,0,0,0.68)'; ctx.fillRect(0,0,W,H);
+  tAnim++;
+  const win=hpFrac(pb)>hpFrac(cb);
+  const col=win?GN1:RD1;
+  const msg=win?'⚔  VICTORY  ⚔':'☠  DEFEAT  ☠';
+
+  ctx.textAlign='center';
+  ctx.font="52px 'MedievalSharp',serif";
+  ctx.fillStyle=col; gl(col,28);
+  ctx.fillText(msg,W/2,H/2-35); ng();
+
+  ctx.font="13px 'Courier Prime',monospace";
+  ctx.fillStyle=col; gl(col,6);
+  const ph=Math.round(hpFrac(pb)*100), ch=Math.round(hpFrac(cb)*100);
+  ctx.fillText(`Your castle: ${ph}%   ·   Enemy castle: ${ch}%`,W/2,H/2+20);
+  ctx.fillText(`Round ${turn} of ${MAX_TURN} completed`,W/2,H/2+42); ng();
+
+  if(Math.floor(tAnim/36)%2){
+    ctx.font="16px 'MedievalSharp',serif"; ctx.fillStyle=GN2;
+    gl(GN2,8); ctx.fillText('[ CLICK TO PLAY AGAIN ]',W/2,H/2+90); ng();
+  }
+  ctx.textAlign='left';
+}
+
+// ── MAIN RENDER ──────────────────────────────────────────────────────
+function render() {
+  ctx.clearRect(0,0,W,H);
+  if(state===S.TITLE){ drawTitle(); return; }
+  drawBG();
+  drawCastle(PC,pb,true);
+  drawCastle(CC,cb,false);
+  drawAim();
+  drawProj();
+  drawFX();
+  if(state===S.OVER) drawGameOver();
+}
+
+// ── PHYSICS ──────────────────────────────────────────────────────────
+function spawnFX(x,y,col) {
+  const chs=['*','+','×','·','!','#','◆'];
+  for(let i=0;i<11;i++){
+    const life=14+Math.random()*8;
+    fx.push({
+      x, y,
+      vx:(Math.random()-.5)*8,
+      vy:(Math.random()-.5)*7-1.5,
+      life, maxLife:life,
+      col, ch:chs[Math.floor(Math.random()*chs.length)]
+    });
+  }
+}
+
+function hitBlock(blocks, r, c, isP) {
+  blocks[r][c]=Math.max(0,blocks[r][c]-1);
+  const rect=bRect(isP?PC:CC,r,c);
+  spawnFX(rect.x+BW/2,rect.y+BH/2,isP?GN1:RD1);
+  flash={cas:isP?'p':'c',r,c,t:8};
+  updateHUD();
+}
+
+function checkHit(px,py,blocks,cas) {
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
+    if(blocks[r][c]<=0) continue;
+    const rect=bRect(cas,r,c);
+    if(px>=rect.x&&px<=rect.x+rect.w&&py>=rect.y&&py<=rect.y+rect.h) return{r,c};
+  }
+  return null;
+}
+
+function endTurn() {
+  proj=null; trail=[];
+  if(hpFrac(pb)<=0||hpFrac(cb)<=0||turn>=MAX_TURN){
+    state=S.OVER; tAnim=0;
+    const win=hpFrac(pb)>hpFrac(cb);
+    setStatus(win?'⚔ YOUR FORTRESS STANDS VICTORIOUS':'☠ YOUR CASTLE HAS FALLEN');
+    return;
+  }
+  if(state===S.FIRE){
+    state=S.CPU;
+    setTimeout(()=>{ if(state===S.CPU) cpuFire(); }, 1100);
+    setStatus('⚙ THE ENEMY COMMANDER PREPARES...');
+  } else {
+    turn++;
+    setRound(turn);
+    state=S.AIM;
+    setStatus('▶ YOUR TURN — Drag right to aim, release to fire');
+  }
+}
+
+function updateProj() {
+  if(!proj) return;
+  trail.push({x:proj.x,y:proj.y});
+  if(trail.length>16) trail.shift();
+  proj.x+=proj.vx; proj.y+=proj.vy; proj.vy+=G_GRAV;
+  if(proj.x<-80||proj.x>W+80||proj.y>GROUND+30){ endTurn(); return; }
+  if(proj.player){
+    const h=checkHit(proj.x,proj.y,cb,CC);
+    if(h){ hitBlock(cb,h.r,h.c,false); endTurn(); }
+  } else {
+    const h=checkHit(proj.x,proj.y,pb,PC);
+    if(h){ hitBlock(pb,h.r,h.c,true); endTurn(); }
+  }
+}
+
+function updateFX() {
+  for(let i=fx.length-1;i>=0;i--){
+    const e=fx[i];
+    e.x+=e.vx; e.y+=e.vy; e.vy+=0.18; e.life--;
+    if(e.life<=0) fx.splice(i,1);
+  }
+  if(flash){ flash.t--; if(flash.t<=0) flash=null; }
+}
+
+// ── AI ───────────────────────────────────────────────────────────────
+function cpuFire() {
+  if(state!==S.CPU) return;
+
+  // Gather surviving player blocks
+  const targets=[];
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++) if(pb[r][c]>0) targets.push({r,c});
+  if(!targets.length){ endTurn(); return; }
+
+  // Prefer higher HP blocks, pick from top 4
+  targets.sort((a,b)=>pb[b.r][b.c]-pb[a.r][a.c]);
+  const t=targets[Math.floor(Math.random()*Math.min(4,targets.length))];
+  const rect=bRect(PC,t.r,t.c);
+  const tx=rect.x+BW/2, ty=rect.y+BH/2;
+  const dx=tx-CL.x, dy=ty-CL.y;
+  const spd=11+Math.random()*7;    // AI speed range
+
+  // Quadratic solution: A*u² + dx*u + (A - dy) = 0, u = vy/vx
+  // Then vx = -spd/√(1+u²), vy = u*vx  (CPU fires leftward, vx<0)
+  const A=0.5*G_GRAV*dx*dx/(spd*spd);
+  const disc=dx*dx-4*A*(A-dy);
+
+  let vx,vy;
+  if(disc<0){
+    // No exact solution: aim roughly toward target with an upward arc
+    const ang=Math.atan2(dy-50,dx);
+    vx=Math.cos(ang)*spd; vy=Math.sin(ang)*spd;
+  } else {
+    const u1=(-dx+Math.sqrt(disc))/(2*A);
+    const u2=(-dx-Math.sqrt(disc))/(2*A);
+    // Pick flatter arc (smaller |u|)
+    const u=Math.abs(u1)<Math.abs(u2)?u1:u2;
+    vx=-spd/Math.sqrt(1+u*u);       // negative = leftward
+    vy=u*vx;
+    // Accuracy noise — increases with distance, slightly randomised
+    const noise=0.22;
+    vy+=(Math.random()-.5)*spd*noise;
+    vx+=(Math.random()-.5)*spd*(noise*0.4);
+  }
+
+  proj={x:CL.x,y:CL.y,vx,vy,player:false};
+  trail=[]; state=S.CFIR;
+  setStatus('☠ THE ENEMY FIRES!');
+}
+
+// ── INPUT ────────────────────────────────────────────────────────────
+canvas.addEventListener('mousedown', e=>{
+  const r=canvas.getBoundingClientRect();
+  const mx=(e.clientX-r.left)*(W/r.width);
+  const my=(e.clientY-r.top)*(H/r.height);
+  if(state===S.TITLE){ startGame(); return; }
+  if(state===S.OVER) { state=S.TITLE; return; }
+  if(state===S.AIM&&mx<W*0.54){
+    drag={ox:mx,oy:my,cx:mx,cy:my};
+  }
+});
+
+canvas.addEventListener('mousemove', e=>{
+  if(!drag) return;
+  const r=canvas.getBoundingClientRect();
+  drag.cx=(e.clientX-r.left)*(W/r.width);
+  drag.cy=(e.clientY-r.top)*(H/r.height);
+});
+
+canvas.addEventListener('mouseup', ()=>{
+  if(!drag||state!==S.AIM){drag=null;return;}
+  const dx=drag.cx-drag.ox, dy=drag.cy-drag.oy;
+  const dist=Math.hypot(dx,dy);
+  drag=null;
+  if(dist<12) return;
+  const spd=Math.min(dist,MAX_DRAG)/MAX_DRAG*MAX_SPD;
+  const ang=Math.atan2(dy,dx);
+  proj={x:PL.x,y:PL.y,vx:Math.cos(ang)*spd,vy:Math.sin(ang)*spd,player:true};
+  trail=[]; state=S.FIRE;
+  setStatus('► FIRE!');
+});
+
+canvas.addEventListener('contextmenu',e=>e.preventDefault());
+canvas.addEventListener('mouseleave',()=>{ if(drag) drag=null; });
+
+// ── LOOP ─────────────────────────────────────────────────────────────
+function update() {
+  if(state===S.FIRE||state===S.CFIR) updateProj();
+  updateFX();
+}
+
+(function loop(){
+  update(); render();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
